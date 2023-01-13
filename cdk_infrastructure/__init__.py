@@ -18,6 +18,7 @@ from aws_cdk import (
     aws_rds as rds,
     aws_redshift as redshift,
     aws_s3 as s3,
+    triggers,
 )
 from constructs import Construct
 
@@ -98,6 +99,37 @@ class RDSService(Construct):
             delete_automated_backups=True,
         )
 
+        self.configure_rds_lambda = triggers.TriggerFunction(  # runs once at Cloudformation creation
+            self,  # purpose is to set MySQL binlog retention hours to 24
+            "ConfigureRDSLambda",
+            runtime=_lambda.Runtime.PYTHON_3_9,
+            code=_lambda.Code.from_asset(
+                "source/configure_rds_lambda",
+                # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_9.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        " && ".join(
+                            [
+                                "pip install -r requirements.txt -t /asset-output",
+                                "cp handler.py /asset-output",  # need to cp instead of mv
+                            ]
+                        ),
+                    ],
+                ),
+            ),
+            handler="handler.lambda_handler",
+            timeout=Duration.seconds(3),  # should be fairly quick
+            execute_after=[self.rds_instance],
+            memory_size=128,  # in MB
+            environment={
+                "RDS_USER": environment["RDS_USER"],
+                "RDS_PASSWORD": environment["RDS_PASSWORD"],
+                "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
+            }
+        )
         self.load_data_to_rds_lambda = _lambda.Function(
             self,
             "LoadDataToRDSLambda",
@@ -132,6 +164,9 @@ class RDSService(Construct):
         )
 
         # connect the AWS resources
+        self.configure_rds_lambda.add_environment(
+            key="RDS_HOST", value=self.rds_instance.db_instance_endpoint_address
+        )
         self.load_data_to_rds_lambda.add_environment(
             key="RDS_HOST", value=self.rds_instance.db_instance_endpoint_address
         )
