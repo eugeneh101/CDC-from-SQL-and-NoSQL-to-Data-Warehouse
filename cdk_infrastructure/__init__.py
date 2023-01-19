@@ -99,9 +99,9 @@ class RDSService(Construct):
             delete_automated_backups=True,
         )
 
-        self.configure_rds_lambda = triggers.TriggerFunction(  # runs once at Cloudformation creation
+        self.configure_rds_lambda = _lambda.Function(  # will be used once in Trigger defined below
             self,  # purpose is to set MySQL binlog retention hours to 24
-            "ConfigureRDSLambda",
+            "ConfigureRDSLambda",  # and create `RDS_TABLE_NAME` in the database
             runtime=_lambda.Runtime.PYTHON_3_9,
             code=_lambda.Code.from_asset(
                 "source/configure_rds_lambda",
@@ -114,7 +114,7 @@ class RDSService(Construct):
                         " && ".join(
                             [
                                 "pip install -r requirements.txt -t /asset-output",
-                                "cp handler.py /asset-output",  # need to cp instead of mv
+                                "cp handler.py txns.csv /asset-output",  # need to cp instead of mv
                             ]
                         ),
                     ],
@@ -122,13 +122,14 @@ class RDSService(Construct):
             ),
             handler="handler.lambda_handler",
             timeout=Duration.seconds(3),  # should be fairly quick
-            execute_after=[self.rds_instance],
             memory_size=128,  # in MB
             environment={
+                "CSV_FILENAME": environment["CSV_FILENAME"],
                 "RDS_USER": environment["RDS_USER"],
                 "RDS_PASSWORD": environment["RDS_PASSWORD"],
                 "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
-            }
+                "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
+            },
         )
         self.load_data_to_rds_lambda = _lambda.Function(
             self,
@@ -155,15 +156,23 @@ class RDSService(Construct):
             timeout=Duration.seconds(3),  # should be fairly quick
             memory_size=128,  # in MB
             environment={
+                "CSV_FILENAME": environment["CSV_FILENAME"],
                 "RDS_USER": environment["RDS_USER"],
                 "RDS_PASSWORD": environment["RDS_PASSWORD"],
                 "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                 "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
-                "CSV_FILENAME": environment["CSV_FILENAME"],
             },
         )
 
         # connect the AWS resources
+        self.trigger_configure_rds_lambda = triggers.Trigger(
+            self,
+            "TriggerConfigureRDSLambda",
+            handler=self.configure_rds_lambda,  # this is underlying Lambda
+            execute_after=[self.rds_instance],  # runs once after RDS creation
+            # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
+            # timeout=self.configure_rds_lambda.timeout,
+        )
         self.configure_rds_lambda.add_environment(
             key="RDS_HOST", value=self.rds_instance.db_instance_endpoint_address
         )
@@ -421,6 +430,31 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                 ),  ### later principle of least privileges
             ],
         )
+        self.configure_redshift_for_dynamodb_cdc_lambda = (
+            _lambda.Function(  # will be used once in Trigger defined below
+                self,  # create the schema and table in Redshift for DynamoDB CDC
+                "ConfigureRedshiftForDynamodbCDCLambda",
+                runtime=_lambda.Runtime.PYTHON_3_9,
+                code=_lambda.Code.from_asset(
+                    "source/configure_redshift_for_dynamodb_cdc_lambda",
+                    exclude=[".venv/*"],
+                ),
+                handler="handler.lambda_handler",
+                timeout=Duration.seconds(10),  # may take some time
+                memory_size=128,  # in MB
+                environment={
+                    "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                    "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
+                    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
+                        "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
+                    ],
+                    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC": environment[
+                        "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
+                    ],
+                },
+                role=self.lambda_redshift_full_access_role,
+            )
+        )
         self.load_s3_files_from_dynamodb_stream_to_redshift_lambda = _lambda.Function(
             self,
             "LoadS3FilesFromDynamoDBStreamToRedshiftLambda",
@@ -455,6 +489,18 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         )
 
         # connect the AWS resources
+        self.trigger_configure_redshift_for_dynamodb_cdc_lambda = triggers.Trigger(
+            self,
+            "TriggerConfigureRedshiftForDynamodbCDCLambda",
+            handler=self.configure_redshift_for_dynamodb_cdc_lambda,  # this is underlying Lambda
+            # runs once after Redshift cluster created and before data loaded into Redshift
+            execute_before=[self.load_s3_files_from_dynamodb_stream_to_redshift_lambda],
+            # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
+            # timeout=self.configure_redshift_for_dynamodb_cdc_lambda.timeout,
+        )
+        self.configure_redshift_for_dynamodb_cdc_lambda.add_environment(
+            key="REDSHIFT_ENDPOINT_ADDRESS", value=redshift_endpoint_address
+        )
         lambda_environment_variables = {
             "S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT": s3_bucket_for_cdc_from_dynamodb_to_redshift.bucket_name,
             "REDSHIFT_ENDPOINT_ADDRESS": redshift_endpoint_address,

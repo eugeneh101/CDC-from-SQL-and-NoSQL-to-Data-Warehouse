@@ -3,15 +3,15 @@ import os
 
 import pymysql
 
+CSV_FILENAME = os.environ["CSV_FILENAME"]
 RDS_HOST = os.environ["RDS_HOST"]
 RDS_USER = os.environ["RDS_USER"]
 RDS_PASSWORD = os.environ["RDS_PASSWORD"]
 RDS_DATABASE_NAME = os.environ["RDS_DATABASE_NAME"]
 RDS_TABLE_NAME = os.environ["RDS_TABLE_NAME"]
-CSV_FILENAME = os.environ["CSV_FILENAME"]
 
 
-def lambda_handler(event, context):
+def lambda_handler(event, context) -> None:
     conn = pymysql.connect(
         host=RDS_HOST,
         user=RDS_USER,
@@ -26,20 +26,11 @@ def lambda_handler(event, context):
             column_name.replace(" ", "_").lower() for column_name in column_names
         ]
         csv_data = [tuple(row) for row in csv_reader]
-        # print(csv_data)
-        cursor.execute(
-            "CREATE TABLE if not exists {rds_table_name} ({column_name_and_types});".format(
-                rds_table_name=RDS_TABLE_NAME,
-                column_name_and_types=", ".join(
-                    f"{column_name} varchar(40)" for column_name in column_names
-                ),
-            )  # did not define a primary key
-        )
-        conn.commit()
         cursor.executemany(
             """
-            INSERT INTO {rds_table_name} ({column_names})
+            INSERT INTO `{rds_database_name}`.`{rds_table_name}` ({column_names})
             VALUES ({column_types});""".format(
+                rds_database_name=RDS_DATABASE_NAME,
                 rds_table_name=RDS_TABLE_NAME,
                 column_names=", ".join(column_names),
                 column_types=", ".join(["%s"] * len(column_names)),

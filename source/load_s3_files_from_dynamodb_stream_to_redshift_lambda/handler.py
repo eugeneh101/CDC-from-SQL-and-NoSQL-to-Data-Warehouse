@@ -3,11 +3,12 @@ import time
 
 import boto3
 
-
 AWS_REGION = os.environ["AWSREGION"]
 
 s3_client = boto3.client("s3")
-S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT = os.environ["S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT"]
+S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT = os.environ[
+    "S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT"
+]
 UNPROCESSED_DYNAMODB_STREAM_FOLDER = os.environ["UNPROCESSED_DYNAMODB_STREAM_FOLDER"]
 PROCESSED_DYNAMODB_STREAM_FOLDER = os.environ["PROCESSED_DYNAMODB_STREAM_FOLDER"]
 
@@ -17,8 +18,12 @@ REDSHIFT_CLUSTER_NAME = os.environ["REDSHIFT_ENDPOINT_ADDRESS"].split(".")[0]
 REDSHIFT_ROLE_ARN = os.environ["REDSHIFT_ROLE_ARN"]
 REDSHIFT_USER = os.environ["REDSHIFT_USER"]
 REDSHIFT_DATABASE_NAME = os.environ["REDSHIFT_DATABASE_NAME"]
-REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC = os.environ["REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"]
-REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC = os.environ["REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"]
+REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC = os.environ[
+    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
+]
+REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC = os.environ[
+    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
+]
 
 
 def execute_sql_statement(sql_statement: str) -> None:
@@ -65,24 +70,10 @@ def lambda_handler(event, context) -> None:
     dynamodb_stream_s3_files = s3_client.list_objects_v2(
         Bucket=S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT,
         Prefix=f"{UNPROCESSED_DYNAMODB_STREAM_FOLDER}/",
-        Delimiter="/"
+        Delimiter="/",
     ).get("Contents", [])
     dynamodb_stream_s3_files = [dct["Key"] for dct in dynamodb_stream_s3_files]
     if dynamodb_stream_s3_files:
-        sql_statements = [
-            f"CREATE SCHEMA IF NOT EXISTS {REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC};",
-            f"""CREATE TABLE IF NOT EXISTS {REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC}.{REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC} (
-                id varchar(30) UNIQUE NOT NULL,
-                details super,
-                price float,
-                shares integer,
-                ticker varchar(10),
-                ticket varchar(10),
-                time super
-            );""",
-        ]
-        for sql_statement in sql_statements:
-            execute_sql_statement(sql_statement=sql_statement)
         for s3_file in dynamodb_stream_s3_files:
             if "__inserted_or_modified_records.json" in s3_file:  # hard coded suffix
                 sql_statement = f"""
@@ -101,7 +92,9 @@ def lambda_handler(event, context) -> None:
                         PROCESSED_DYNAMODB_STREAM_FOLDER,
                     ),
                 )
-            elif "__no_inserted_or_modified_records.txt" in s3_file:  # hard coded suffix
+            elif (
+                "__no_inserted_or_modified_records.txt" in s3_file
+            ):  # hard coded suffix
                 move_s3_file(
                     s3_bucket=S3_BUCKET_FOR_DYNAMODB_STREAM_TO_REDSHIFT,
                     old_s3_filename=s3_file,
