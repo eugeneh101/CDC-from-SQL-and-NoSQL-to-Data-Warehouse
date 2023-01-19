@@ -3,13 +3,14 @@ import os
 
 import boto3
 
-
 dms_client = boto3.client("dms")
 DMS_REPLICATION_TASK_ARN = os.environ["DMS_REPLICATION_TASK_ARN"]
-PRINT_RDS_AND_REDSHIFT_NUM_ROWS = json.loads(os.environ["PRINT_RDS_AND_REDSHIFT_NUM_ROWS"])
+PRINT_RDS_AND_REDSHIFT_NUM_ROWS = json.loads(
+    os.environ["PRINT_RDS_AND_REDSHIFT_NUM_ROWS"]
+)
 if PRINT_RDS_AND_REDSHIFT_NUM_ROWS:
-    import pymysql
     import time
+    import pymysql
 
     redshift_data_client = boto3.client("redshift-data")
 
@@ -47,8 +48,8 @@ def count_redshift_table_num_rows():
         Database=REDSHIFT_DATABASE_NAME,
         DbUser=REDSHIFT_USER,
         Sql="SELECT COUNT(*) FROM {}.{}.{};".format(
-                REDSHIFT_DATABASE_NAME, RDS_DATABASE_NAME, RDS_TABLE_NAME
-            ),
+            REDSHIFT_DATABASE_NAME, RDS_DATABASE_NAME, RDS_TABLE_NAME
+        ),
     )
     time.sleep(1)
     while True:

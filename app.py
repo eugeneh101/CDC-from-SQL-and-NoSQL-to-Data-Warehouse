@@ -1,5 +1,5 @@
-import boto3
 import aws_cdk as cdk
+import boto3
 
 from cdk_infrastructure import CDCStack
 
