@@ -68,35 +68,39 @@ class RDSService(Construct):
         security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
-        self.rds_instance = rds.DatabaseInstance(
+        self.rds_aurora_cluster = rds.DatabaseCluster(
             self,
-            "RDSForCDCToRedshift",
-            engine=rds.DatabaseInstanceEngine.mysql(
-                version=rds.MysqlEngineVersion.VER_8_0_28
+            "RDSAuroraForCDCToRedshift",
+            engine=rds.DatabaseClusterEngine.aurora_mysql(
+                version=rds.AuroraMysqlEngineVersion.VER_3_01_1
             ),
-            instance_type=ec2.InstanceType(
-                "t3.micro"
-            ),  # for demo purposes; otherwise defaults to m5.large
             credentials=rds.Credentials.from_username(
                 username=environment["RDS_USER"],
                 password=SecretValue.unsafe_plain_text(environment["RDS_PASSWORD"]),
             ),
-            database_name=environment["RDS_DATABASE_NAME"],
+            default_database_name=environment["RDS_DATABASE_NAME"],
             port=environment["RDS_PORT"],
-            vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PUBLIC
-            ),  ### will have to figure out VPC
-            security_groups=[security_group],
             parameters={  # needed for DMS replication task to run successfully
                 "binlog_format": "ROW",
                 "binlog_row_image": "full",
                 "binlog_checksum": "NONE",
                 ### eventually set binlog retention hours with CustomResource
             },
-            publicly_accessible=True,  ### will have to figure out VPC
             removal_policy=RemovalPolicy.DESTROY,
-            delete_automated_backups=True,
+            instances=2,  # defaults to 2 anyway
+            instance_props=rds.InstanceProps(
+                vpc=vpc,
+                vpc_subnets=ec2.SubnetSelection(
+                    subnet_type=ec2.SubnetType.PUBLIC
+                ),  ### will have to figure out VPC
+                security_groups=[security_group],
+                publicly_accessible=True,  ### will have to figure out VPC
+                delete_automated_backups=True,
+                instance_type=ec2.InstanceType("t3.medium"),
+            ),
+            # cloudwatch_logs_retention=aws_logs.RetentionDays.THREE_DAYS,
+            # cluster_identifier=db_cluster_name,
+            # subnet_group=rds_subnet_group,
         )
 
         self.configure_rds_lambda = _lambda.Function(  # will be used once in Trigger defined below
@@ -169,16 +173,16 @@ class RDSService(Construct):
             self,
             "TriggerConfigureRDSLambda",
             handler=self.configure_rds_lambda,  # this is underlying Lambda
-            execute_after=[self.rds_instance],  # runs once after RDS creation
+            execute_after=[self.rds_aurora_cluster],  # runs once after RDS creation and
             execute_before=[self.load_data_to_rds_lambda],  # before data is loaded to RDS
             # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
             # timeout=self.configure_rds_lambda.timeout,
         )
         self.configure_rds_lambda.add_environment(
-            key="RDS_HOST", value=self.rds_instance.db_instance_endpoint_address
+            key="RDS_HOST", value=self.rds_aurora_cluster.cluster_endpoint.hostname
         )
         self.load_data_to_rds_lambda.add_environment(
-            key="RDS_HOST", value=self.rds_instance.db_instance_endpoint_address
+            key="RDS_HOST", value=self.rds_aurora_cluster.cluster_endpoint.hostname
         )
 
 
@@ -554,7 +558,7 @@ class CDCStack(Stack):
             self,
             "CDCFromRDSToRedshiftService",
             environment=environment,
-            rds_endpoint_address=self.rds_service.rds_instance.db_instance_endpoint_address,
+            rds_endpoint_address=self.rds_service.rds_aurora_cluster.cluster_endpoint.hostname,
             redshift_endpoint_address=self.redshift_service.redshift_cluster.attr_endpoint_address,
             security_group_id=self.security_group_for_rds_redshift_dms.security_group_id,
         )
@@ -601,7 +605,12 @@ class CDCStack(Stack):
         self.output_rds_endpoint_address = CfnOutput(
             self,
             "RdsEndpointAddress",  # Output omits underscores and hyphens
-            value=self.rds_service.rds_instance.db_instance_endpoint_address,
+            value=self.rds_service.rds_aurora_cluster.cluster_endpoint.hostname,
+        )
+        self.output_rds_read_only_endpoint_address = CfnOutput(
+            self,
+            "RdsReadOnlyEndpointAddress",  # Output omits underscores and hyphens
+            value=self.rds_service.rds_aurora_cluster.cluster_read_endpoint.hostname,
         )
         self.output_dynamodb_table_name = CfnOutput(
             self,
