@@ -170,6 +170,7 @@ class RDSService(Construct):
             "TriggerConfigureRDSLambda",
             handler=self.configure_rds_lambda,  # this is underlying Lambda
             execute_after=[self.rds_instance],  # runs once after RDS creation
+            execute_before=[self.load_data_to_rds_lambda],  # before data is loaded to RDS
             # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
             # timeout=self.configure_rds_lambda.timeout,
         )
