@@ -7,6 +7,7 @@
 * connect to MySQL database in MySQL Workbench
 * can connect with Redshift cluster with psycopg2
 * It's possible to create the table 1 time for Redshift and RDS: yes, used Trigger
+    * Can also consider using AwsCustomResource
 
 * Redshift can copy directly from DynamoDB table
 * DynamoDB can use Kinesis stream instead of DynamoDB stream
