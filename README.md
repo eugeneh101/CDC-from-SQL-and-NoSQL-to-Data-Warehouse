@@ -8,6 +8,7 @@
 * can connect with Redshift cluster with psycopg2
 * It's possible to create the table 1 time for Redshift and RDS: yes, used Trigger
     * Can also consider using AwsCustomResource
+* appears that "rds-data" API in boto3 is only for Aurora Serverless V1. Connecting to RDS endpoint is the standard approach. It appears you could use IAM authentication token
 
 * Redshift can copy directly from DynamoDB table
 * DynamoDB can use Kinesis stream instead of DynamoDB stream
