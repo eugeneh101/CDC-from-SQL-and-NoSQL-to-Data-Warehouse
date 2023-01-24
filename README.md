@@ -1,4 +1,5 @@
 * try restarting DMS migration task, check to see DMS task continues to run: yes
+    * check to see if DMS runs given different RDS flavors
 * check to see S3 expired files are deleted: yes
 * set MySQL binary log retention hours: yes, used Trigger
 * mysql -h cdcstack-rdsservicerdstocdctoredshiftf398d7a0-gvhlj93xg4n.c6ivt0xhpth.us-east-1.rds.amazonaws.com -u admin -p
