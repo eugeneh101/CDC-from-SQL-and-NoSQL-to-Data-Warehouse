@@ -261,8 +261,10 @@ class CDCFromRDSToRedshiftService(Construct):
                     "RDS_PASSWORD": environment["RDS_PASSWORD"],
                     "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                     "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
+
                     "REDSHIFT_ENDPOINT_ADDRESS": redshift_endpoint_address,
                     "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                    "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
                     "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
                 }
             )
@@ -298,18 +300,6 @@ class CDCFromRDSToRedshiftService(Construct):
                 resources=["*"],
             )
         )
-        if environment["PRINT_RDS_AND_REDSHIFT_NUM_ROWS"]:
-            self.start_dms_replication_task_lambda.add_to_role_policy(
-                iam.PolicyStatement(
-                    actions=[
-                        "redshift-data:ExecuteStatement",
-                        "redshift-data:DescribeStatement",
-                        "redshift-data:GetStatementResult",
-                        "redshift:GetClusterCredentials",
-                    ],
-                    resources=["*"],
-                )
-            )
 
         # connect the AWS resources
         self.start_dms_replication_task_lambda.add_environment(
@@ -438,13 +428,27 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                 runtime=_lambda.Runtime.PYTHON_3_9,
                 code=_lambda.Code.from_asset(
                     "source/configure_redshift_for_dynamodb_cdc_lambda",
-                    exclude=[".venv/*"],
+                    # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
+                    bundling=BundlingOptions(
+                        image=_lambda.Runtime.PYTHON_3_9.bundling_image,
+                        command=[
+                            "bash",
+                            "-c",
+                            " && ".join(
+                                [
+                                    "pip install -r requirements.txt -t /asset-output",
+                                    "cp handler.py /asset-output",  # need to cp instead of mv
+                                ]
+                            ),
+                        ],
+                    ),
                 ),
                 handler="handler.lambda_handler",
                 timeout=Duration.seconds(10),  # may take some time
                 memory_size=128,  # in MB
                 environment={
                     "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                    "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
                     "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
                     "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
                         "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
@@ -453,7 +457,7 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                         "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
                     ],
                 },
-                role=self.lambda_redshift_full_access_role,
+                role=self.lambda_redshift_full_access_role,  ### maybe no longer needed
             )
         )
         self.load_s3_files_from_dynamodb_stream_to_redshift_lambda = _lambda.Function(
@@ -462,13 +466,27 @@ class CDCFromDynamoDBToRedshiftService(Construct):
             runtime=_lambda.Runtime.PYTHON_3_9,
             code=_lambda.Code.from_asset(
                 "source/load_s3_files_from_dynamodb_stream_to_redshift_lambda",
-                exclude=[".venv/*"],
+                # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_9.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        " && ".join(
+                            [
+                                "pip install -r requirements.txt -t /asset-output",
+                                "cp handler.py /asset-output",  # need to cp instead of mv
+                            ]
+                        ),
+                    ],
+                ),
             ),
             handler="handler.lambda_handler",
             timeout=Duration.seconds(20),  # may take some time if many files
             memory_size=128,  # in MB
             environment={
                 "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                "REDSHIFT_PASSWORD":environment["REDSHIFT_PASSWORD"],
                 "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
                 "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
                     "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
@@ -486,7 +504,7 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                     "PROCESSED_DYNAMODB_STREAM_FOLDER"
                 ],
             },
-            role=self.lambda_redshift_full_access_role,
+            role=self.lambda_redshift_full_access_role,  ### maybe no longer need
         )
 
         # connect the AWS resources
