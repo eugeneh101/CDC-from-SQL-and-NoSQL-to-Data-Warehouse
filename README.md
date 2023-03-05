@@ -12,6 +12,7 @@
 * appears that "rds-data" API in boto3 is only for Aurora Serverless V1. Connecting to RDS endpoint is the standard approach. It appears you could use IAM authentication token
 * Can turn off Publicly Accessible if put everything in VPC
 * In real deployment, figure out VPC and use Secrets Manager 
+* Run `dos2unix FILENAME` (which runs in-place) to remove ^M from the end of the line
 
 * Redshift can copy directly from DynamoDB table
 * DynamoDB can use Kinesis stream instead of DynamoDB stream
