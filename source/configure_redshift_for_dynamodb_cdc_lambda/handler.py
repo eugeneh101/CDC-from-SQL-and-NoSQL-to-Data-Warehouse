@@ -36,8 +36,7 @@ def lambda_handler(event, context) -> None:
         user=REDSHIFT_USER,
         password=REDSHIFT_PASSWORD,
     )
-    cursor = conn.cursor()
-    with conn, cursor:
+    with conn, conn.cursor() as cursor:
         for sql_statement in sql_statements:
             cursor.execute(sql_statement)
             conn.commit()
