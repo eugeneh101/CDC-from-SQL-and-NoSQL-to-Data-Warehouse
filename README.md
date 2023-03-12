@@ -13,6 +13,19 @@
 * Can turn off Publicly Accessible if put everything in VPC
 * In real deployment, figure out VPC and use Secrets Manager 
 * Run `dos2unix FILENAME` (which runs in-place) to remove ^M from the end of the line
+* If you create VPC endpoint (S3, DynamoDB) and you want the made an pre-existing Lambda connect, then you need to add to the permissions. Not necessary if Lambda and VPC endpoint created at the same time:
+```python
+iam.PolicyStatement(
+    actions=[
+        "ec2:CreateNetworkInterface",
+        "ec2:DescribeNetworkInterfaces",
+        "ec2:DeleteNetworkInterface",
+        "ec2:AssignPrivateIpAddresses",
+        "ec2:UnassignPrivateIpAddresses",
+    ],
+    resources = ["*"],
+)
+```
 
 * Redshift can copy directly from DynamoDB table
 * DynamoDB can use Kinesis stream instead of DynamoDB stream
