@@ -406,21 +406,9 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         s3_bucket_for_cdc_from_dynamodb_to_redshift: s3.Bucket,
         redshift_endpoint_address: str,
         redshift_role_arn: str,
+        vpc: ec2.Vpc,
     ) -> None:
         super().__init__(scope, construct_id)  # required
-        self.lambda_redshift_full_access_role = iam.Role(
-            self,
-            "LambdaRedshiftFullAccessRole",
-            assumed_by=iam.ServicePrincipal("lambda.amazonaws.com"),
-            managed_policies=[
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "service-role/AWSLambdaBasicExecutionRole"
-                ),
-                iam.ManagedPolicy.from_aws_managed_policy_name(
-                    "AmazonRedshiftFullAccess"
-                ),  ### later principle of least privileges
-            ],
-        )
         self.configure_redshift_for_dynamodb_cdc_lambda = (
             _lambda.Function(  # will be used once in Trigger defined below
                 self,  # create the schema and table in Redshift for DynamoDB CDC
@@ -457,7 +445,8 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                         "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
                     ],
                 },
-                role=self.lambda_redshift_full_access_role,  ### maybe no longer needed
+                vpc=vpc,
+                allow_public_subnet=True,  ### might not do in real life
             )
         )
         self.load_s3_files_from_dynamodb_stream_to_redshift_lambda = _lambda.Function(
@@ -504,7 +493,8 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                     "PROCESSED_DYNAMODB_STREAM_FOLDER"
                 ],
             },
-            role=self.lambda_redshift_full_access_role,  ### maybe no longer need
+            vpc=vpc,
+            allow_public_subnet=True,  ### might not do in real life
         )
 
         # connect the AWS resources
@@ -532,6 +522,9 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         s3_bucket_for_cdc_from_dynamodb_to_redshift.grant_read_write(
             self.load_s3_files_from_dynamodb_stream_to_redshift_lambda
         )
+        self.s3_endpoint = vpc.add_gateway_endpoint(  # VPC endpoint needed
+            "S3Endpoint", service=ec2.GatewayVpcEndpointAwsService.S3
+        )  # by load_s3_files_from_dynamodb_stream_to_redshift_lambda
 
 
 class CDCStack(Stack):
@@ -586,6 +579,7 @@ class CDCStack(Stack):
             s3_bucket_for_cdc_from_dynamodb_to_redshift=self.dynamodb_service.s3_bucket_for_cdc_from_dynamodb_to_redshift,
             redshift_endpoint_address=self.redshift_service.redshift_cluster.attr_endpoint_address,
             redshift_role_arn=self.redshift_service.redshift_full_commands_full_access_role.role_arn,
+            vpc=self.default_vpc,
         )
 
         # schedule Lambdas to run
