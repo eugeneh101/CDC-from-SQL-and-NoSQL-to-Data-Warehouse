@@ -65,8 +65,7 @@ def lambda_handler(event, context) -> None:
                     user=REDSHIFT_USER,
                     password=REDSHIFT_PASSWORD,
                 )
-                cursor = conn.cursor()
-                with conn, cursor:
+                with conn, conn.cursor() as cursor:
                     cursor.execute(sql_statement)
                     conn.commit()
                     print(f"Finished executing the following SQL statement: {sql_statement}")
