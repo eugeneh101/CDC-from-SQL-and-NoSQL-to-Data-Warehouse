@@ -49,7 +49,7 @@ class RedshiftService(Construct):
             subnet_ids=vpc.select_subnets(  # Redshift can exist within only 1 AZs
                 subnet_type=ec2.SubnetType.PRIVATE_ISOLATED
             ).subnet_ids,
-            description="Redshift Cluster Subnet Group"
+            description="Redshift Cluster Subnet Group",
         )
         self.redshift_cluster = redshift.CfnCluster(
             self,
@@ -183,7 +183,9 @@ class RDSService(Construct):
             "TriggerConfigureRDSLambda",
             handler=self.configure_rds_lambda,  # this is underlying Lambda
             execute_after=[self.rds_instance],  # runs once after RDS creation
-            execute_before=[self.load_data_to_rds_lambda],  # before data is loaded to RDS
+            execute_before=[  # before data is loaded to RDS
+                self.load_data_to_rds_lambda
+            ],
             # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
             # timeout=self.configure_rds_lambda.timeout,
         )
@@ -285,7 +287,6 @@ class CDCFromRDSToRedshiftService(Construct):
                     "RDS_PASSWORD": environment["RDS_PASSWORD"],
                     "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                     "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
-
                     "REDSHIFT_ENDPOINT_ADDRESS": redshift_endpoint_address,
                     "REDSHIFT_USER": environment["REDSHIFT_USER"],
                     "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
@@ -459,46 +460,44 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
-        self.configure_redshift_for_dynamodb_cdc_lambda = (
-            _lambda.Function(  # will be used once in Trigger defined below
-                self,  # create the schema and table in Redshift for DynamoDB CDC
-                "ConfigureRedshiftForDynamodbCDCLambda",
-                runtime=_lambda.Runtime.PYTHON_3_9,
-                code=_lambda.Code.from_asset(
-                    "source/configure_redshift_for_dynamodb_cdc_lambda",
-                    # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
-                    bundling=BundlingOptions(
-                        image=_lambda.Runtime.PYTHON_3_9.bundling_image,
-                        command=[
-                            "bash",
-                            "-c",
-                            " && ".join(
-                                [
-                                    "pip install -r requirements.txt -t /asset-output",
-                                    "cp handler.py /asset-output",  # need to cp instead of mv
-                                ]
-                            ),
-                        ],
-                    ),
+        self.configure_redshift_for_dynamodb_cdc_lambda = _lambda.Function(  # will be used once in Trigger defined below
+            self,  # create the schema and table in Redshift for DynamoDB CDC
+            "ConfigureRedshiftForDynamodbCDCLambda",
+            runtime=_lambda.Runtime.PYTHON_3_9,
+            code=_lambda.Code.from_asset(
+                "source/configure_redshift_for_dynamodb_cdc_lambda",
+                # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_9.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        " && ".join(
+                            [
+                                "pip install -r requirements.txt -t /asset-output",
+                                "cp handler.py /asset-output",  # need to cp instead of mv
+                            ]
+                        ),
+                    ],
                 ),
-                handler="handler.lambda_handler",
-                timeout=Duration.seconds(10),  # may take some time
-                memory_size=128,  # in MB
-                environment={
-                    "REDSHIFT_USER": environment["REDSHIFT_USER"],
-                    "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
-                    "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
-                    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
-                        "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
-                    ],
-                    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC": environment[
-                        "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
-                    ],
-                },
-                vpc=vpc,
-                vpc_subnets=vpc_subnets,
-                security_groups=[security_group],
-            )
+            ),
+            handler="handler.lambda_handler",
+            timeout=Duration.seconds(10),  # may take some time
+            memory_size=128,  # in MB
+            environment={
+                "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
+                "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
+                "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
+                    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
+                ],
+                "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC": environment[
+                    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
+                ],
+            },
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
         self.load_s3_files_from_dynamodb_stream_to_redshift_lambda = _lambda.Function(
             self,
@@ -526,7 +525,7 @@ class CDCFromDynamoDBToRedshiftService(Construct):
             memory_size=128,  # in MB
             environment={
                 "REDSHIFT_USER": environment["REDSHIFT_USER"],
-                "REDSHIFT_PASSWORD":environment["REDSHIFT_PASSWORD"],
+                "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
                 "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
                 "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
                     "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
@@ -590,7 +589,9 @@ class CDCStack(Stack):
         self, scope: Construct, construct_id: str, environment: dict, **kwargs
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
-        self.all_availability_zones = environment["ALL_AVAILABILITY_ZONES"]  ### delete later
+        self.all_availability_zones = environment[  ### delete later
+            "ALL_AVAILABILITY_ZONES"
+        ]
         self.vpc = ec2.Vpc(
             self,
             "VPC",
@@ -601,7 +602,9 @@ class CDCStack(Stack):
                     cidr_mask=24,
                 )
             ],
-            availability_zones=environment["DMS_AVAILABILITY_ZONES"][:2],  # (RDS) DB subnet group needs at least 2 AZs
+            availability_zones=environment["DMS_AVAILABILITY_ZONES"][
+                :2  # (RDS) DB subnet group needs at least 2 AZs
+            ],
         )
         self.security_group_for_rds_redshift_dms = ec2.SecurityGroup(
             self,  # actually the "default" security group is sufficient
