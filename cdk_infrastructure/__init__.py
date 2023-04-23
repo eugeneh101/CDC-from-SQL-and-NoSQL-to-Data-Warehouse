@@ -29,6 +29,7 @@ class RedshiftService(Construct):
         scope: Construct,
         construct_id: str,
         environment: dict,
+        vpc: ec2.Vpc,
         security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
@@ -42,6 +43,14 @@ class RedshiftService(Construct):
                 ),  ### later principle of least privileges
             ],
         )
+        redshift_cluster_subnet_group = redshift.CfnClusterSubnetGroup(
+            self,
+            "RedshiftClusterSubnetGroup",
+            subnet_ids=vpc.select_subnets(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ).subnet_ids,
+            description="Redshift Cluster Subnet Group",
+        )
         self.redshift_cluster = redshift.CfnCluster(
             self,
             "RedshiftCluster",
@@ -52,7 +61,7 @@ class RedshiftService(Construct):
             master_username=environment["REDSHIFT_USER"],
             master_user_password=environment["REDSHIFT_PASSWORD"],
             iam_roles=[self.redshift_full_commands_full_access_role.role_arn],
-            # cluster_subnet_group_name=demo_cluster_subnet_group.ref,
+            cluster_subnet_group_name=redshift_cluster_subnet_group.ref,  # needed or will use default VPC
             vpc_security_group_ids=[security_group.security_group_id],
             publicly_accessible=False,
         )
@@ -65,9 +74,17 @@ class RDSService(Construct):
         construct_id: str,
         environment: dict,
         vpc: ec2.Vpc,
+        vpc_subnets: ec2.SubnetSelection,
         security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
+        rds_subnet_group = rds.SubnetGroup(
+            self,
+            "RdsSubnetGroup",
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,  # requires at least 2 AZs
+            description="RDS Subnet Group",
+        )
         self.rds_instance = rds.DatabaseInstance(
             self,
             "RDSForCDCToRedshift",
@@ -84,17 +101,14 @@ class RDSService(Construct):
             database_name=environment["RDS_DATABASE_NAME"],
             port=environment["RDS_PORT"],
             vpc=vpc,
-            vpc_subnets=ec2.SubnetSelection(
-                subnet_type=ec2.SubnetType.PUBLIC
-            ),  ### will have to figure out VPC
+            subnet_group=rds_subnet_group,
             security_groups=[security_group],
             parameters={  # needed for DMS replication task to run successfully
                 "binlog_format": "ROW",
                 "binlog_row_image": "full",
                 "binlog_checksum": "NONE",
-                ### eventually set binlog retention hours with CustomResource
             },
-            publicly_accessible=True,  ### will have to figure out VPC
+            publicly_accessible=False,
             removal_policy=RemovalPolicy.DESTROY,
             delete_automated_backups=True,
         )
@@ -130,6 +144,9 @@ class RDSService(Construct):
                 "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                 "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
             },
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
         self.load_data_to_rds_lambda = _lambda.Function(
             self,
@@ -162,6 +179,9 @@ class RDSService(Construct):
                 "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                 "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
             },
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
 
         # connect the AWS resources
@@ -170,7 +190,9 @@ class RDSService(Construct):
             "TriggerConfigureRDSLambda",
             handler=self.configure_rds_lambda,  # this is underlying Lambda
             execute_after=[self.rds_instance],  # runs once after RDS creation
-            execute_before=[self.load_data_to_rds_lambda],  # before data is loaded to RDS
+            execute_before=[  # before data is loaded to RDS
+                self.load_data_to_rds_lambda
+            ],
             # invocation_type=triggers.InvocationType.REQUEST_RESPONSE,
             # timeout=self.configure_rds_lambda.timeout,
         )
@@ -190,7 +212,9 @@ class CDCFromRDSToRedshiftService(Construct):
         environment: dict,
         rds_endpoint_address: str,
         redshift_endpoint_address: str,
-        security_group_id: str,
+        vpc: ec2.Vpc,
+        vpc_subnets: ec2.SubnetSelection,
+        security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
         self.dms_rds_source_endpoint = dms.CfnEndpoint(
@@ -210,15 +234,24 @@ class CDCFromRDSToRedshiftService(Construct):
             engine_name="redshift",
             database_name=environment["REDSHIFT_DATABASE_NAME"],
             server_name=redshift_endpoint_address,
-            port=5439,
+            port=environment["REDSHIFT_PORT"],
             username=environment["REDSHIFT_USER"],
             password=environment["REDSHIFT_PASSWORD"],
+        )
+        dms_subnet_group = dms.CfnReplicationSubnetGroup(
+            self,
+            "DmsSubnetGroup",
+            subnet_ids=vpc.select_subnets(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ).subnet_ids,
+            replication_subnet_group_description="DMS Subnet Group",
         )
         self.dms_replication_instance = dms.CfnReplicationInstance(
             self,
             "DMSReplicationInstance",
             replication_instance_class="dms.t3.micro",  # for demo purposes
-            vpc_security_group_ids=[security_group_id],
+            replication_subnet_group_identifier=dms_subnet_group.ref,  # needed or will use default VPC
+            vpc_security_group_ids=[security_group.security_group_id],
             publicly_accessible=False,
         )
         self.dms_replication_task = dms.CfnReplicationTask(
@@ -261,7 +294,6 @@ class CDCFromRDSToRedshiftService(Construct):
                     "RDS_PASSWORD": environment["RDS_PASSWORD"],
                     "RDS_DATABASE_NAME": environment["RDS_DATABASE_NAME"],
                     "RDS_TABLE_NAME": environment["RDS_TABLE_NAME"],
-
                     "REDSHIFT_ENDPOINT_ADDRESS": redshift_endpoint_address,
                     "REDSHIFT_USER": environment["REDSHIFT_USER"],
                     "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
@@ -293,6 +325,9 @@ class CDCFromRDSToRedshiftService(Construct):
             timeout=Duration.seconds(3),  # should be fairly quick
             memory_size=128,  # in MB
             environment=env_vars,
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
         self.start_dms_replication_task_lambda.add_to_role_policy(
             iam.PolicyStatement(
@@ -314,6 +349,9 @@ class DynamoDBService(Construct):
         scope: Construct,
         construct_id: str,
         environment: dict,
+        vpc: ec2.Vpc,
+        vpc_subnets: ec2.SubnetSelection,
+        security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
         self.dynamodb_table = dynamodb.Table(
@@ -354,6 +392,9 @@ class DynamoDBService(Construct):
             timeout=Duration.seconds(3),  # should be fairly quick
             memory_size=128,  # in MB
             environment={"JSON_FILENAME": environment["JSON_FILENAME"]},
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
         self.write_dynamodb_stream_to_s3_lambda = _lambda.Function(
             self,
@@ -372,6 +413,9 @@ class DynamoDBService(Construct):
                     "UNPROCESSED_DYNAMODB_STREAM_FOLDER"
                 ],
             },
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
 
         # connect the AWS resources
@@ -407,47 +451,48 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         redshift_endpoint_address: str,
         redshift_role_arn: str,
         vpc: ec2.Vpc,
+        vpc_subnets: ec2.SubnetSelection,
+        security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
-        self.configure_redshift_for_dynamodb_cdc_lambda = (
-            _lambda.Function(  # will be used once in Trigger defined below
-                self,  # create the schema and table in Redshift for DynamoDB CDC
-                "ConfigureRedshiftForDynamodbCDCLambda",
-                runtime=_lambda.Runtime.PYTHON_3_9,
-                code=_lambda.Code.from_asset(
-                    "source/configure_redshift_for_dynamodb_cdc_lambda",
-                    # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
-                    bundling=BundlingOptions(
-                        image=_lambda.Runtime.PYTHON_3_9.bundling_image,
-                        command=[
-                            "bash",
-                            "-c",
-                            " && ".join(
-                                [
-                                    "pip install -r requirements.txt -t /asset-output",
-                                    "cp handler.py /asset-output",  # need to cp instead of mv
-                                ]
-                            ),
-                        ],
-                    ),
+        self.configure_redshift_for_dynamodb_cdc_lambda = _lambda.Function(  # will be used once in Trigger defined below
+            self,  # create the schema and table in Redshift for DynamoDB CDC
+            "ConfigureRedshiftForDynamodbCDCLambda",
+            runtime=_lambda.Runtime.PYTHON_3_9,
+            code=_lambda.Code.from_asset(
+                "source/configure_redshift_for_dynamodb_cdc_lambda",
+                # exclude=[".venv/*"],  # seems to no longer do anything if use BundlingOptions
+                bundling=BundlingOptions(
+                    image=_lambda.Runtime.PYTHON_3_9.bundling_image,
+                    command=[
+                        "bash",
+                        "-c",
+                        " && ".join(
+                            [
+                                "pip install -r requirements.txt -t /asset-output",
+                                "cp handler.py /asset-output",  # need to cp instead of mv
+                            ]
+                        ),
+                    ],
                 ),
-                handler="handler.lambda_handler",
-                timeout=Duration.seconds(10),  # may take some time
-                memory_size=128,  # in MB
-                environment={
-                    "REDSHIFT_USER": environment["REDSHIFT_USER"],
-                    "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
-                    "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
-                    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
-                        "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
-                    ],
-                    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC": environment[
-                        "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
-                    ],
-                },
-                vpc=vpc,
-                allow_public_subnet=True,  ### might not do in real life
-            )
+            ),
+            handler="handler.lambda_handler",
+            timeout=Duration.seconds(10),  # may take some time
+            memory_size=128,  # in MB
+            environment={
+                "REDSHIFT_USER": environment["REDSHIFT_USER"],
+                "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
+                "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
+                "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
+                    "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
+                ],
+                "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC": environment[
+                    "REDSHIFT_TABLE_NAME_FOR_DYNAMODB_CDC"
+                ],
+            },
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
         self.load_s3_files_from_dynamodb_stream_to_redshift_lambda = _lambda.Function(
             self,
@@ -475,7 +520,7 @@ class CDCFromDynamoDBToRedshiftService(Construct):
             memory_size=128,  # in MB
             environment={
                 "REDSHIFT_USER": environment["REDSHIFT_USER"],
-                "REDSHIFT_PASSWORD":environment["REDSHIFT_PASSWORD"],
+                "REDSHIFT_PASSWORD": environment["REDSHIFT_PASSWORD"],
                 "REDSHIFT_DATABASE_NAME": environment["REDSHIFT_DATABASE_NAME"],
                 "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC": environment[
                     "REDSHIFT_SCHEMA_NAME_FOR_DYNAMODB_CDC"
@@ -494,7 +539,8 @@ class CDCFromDynamoDBToRedshiftService(Construct):
                 ],
             },
             vpc=vpc,
-            allow_public_subnet=True,  ### might not do in real life
+            vpc_subnets=vpc_subnets,
+            security_groups=[security_group],
         )
 
         # connect the AWS resources
@@ -522,9 +568,6 @@ class CDCFromDynamoDBToRedshiftService(Construct):
         s3_bucket_for_cdc_from_dynamodb_to_redshift.grant_read_write(
             self.load_s3_files_from_dynamodb_stream_to_redshift_lambda
         )
-        self.s3_endpoint = vpc.add_gateway_endpoint(  # VPC endpoint needed
-            "S3Endpoint", service=ec2.GatewayVpcEndpointAwsService.S3
-        )  # by load_s3_files_from_dynamodb_stream_to_redshift_lambda
 
 
 class CDCStack(Stack):
@@ -532,11 +575,30 @@ class CDCStack(Stack):
         self, scope: Construct, construct_id: str, environment: dict, **kwargs
     ) -> None:
         super().__init__(scope, construct_id, **kwargs)
-        self.default_vpc = ec2.Vpc.from_lookup(self, "DefaultVPC", is_default=True)
-        self.security_group_for_rds_redshift_dms = ec2.SecurityGroup(
+
+        self.vpc = ec2.Vpc(
             self,
+            "VPC",
+            subnet_configuration=[
+                ec2.SubnetConfiguration(
+                    name="Public-Subnet",
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                ),
+                ec2.SubnetConfiguration(
+                    name="Private-Subnet",
+                    subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
+                    cidr_mask=24,
+                ),
+            ],
+            max_azs=2,  # (RDS) DB subnet group needs at least 2 AZs
+            nat_gateways=1,
+        )
+
+        self.security_group_for_rds_redshift_dms = ec2.SecurityGroup(
+            self,  # actually the "default" security group is sufficient
             "SecurityGroupForRDSRedshiftDMS",
-            vpc=self.default_vpc,
+            vpc=self.vpc,
             allow_all_outbound=True,
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for RDS + DMS
@@ -552,13 +614,17 @@ class CDCStack(Stack):
             self,
             "RedshiftService",
             environment=environment,
+            vpc=self.vpc,
             security_group=self.security_group_for_rds_redshift_dms,
         )
         self.rds_service = RDSService(
             self,
             "RDSService",
             environment=environment,
-            vpc=self.default_vpc,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
             security_group=self.security_group_for_rds_redshift_dms,
         )
         self.cdc_from_rds_to_redshift_service = CDCFromRDSToRedshiftService(
@@ -567,10 +633,21 @@ class CDCStack(Stack):
             environment=environment,
             rds_endpoint_address=self.rds_service.rds_instance.db_instance_endpoint_address,
             redshift_endpoint_address=self.redshift_service.redshift_cluster.attr_endpoint_address,
-            security_group_id=self.security_group_for_rds_redshift_dms.security_group_id,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
+            security_group=self.security_group_for_rds_redshift_dms,
         )
         self.dynamodb_service = DynamoDBService(
-            self, "DynamoDBService", environment=environment
+            self,
+            "DynamoDBService",
+            environment=environment,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
+            security_group=self.security_group_for_rds_redshift_dms,
         )
         self.cdc_from_dynamodb_to_redshift_service = CDCFromDynamoDBToRedshiftService(
             self,
@@ -579,7 +656,11 @@ class CDCStack(Stack):
             s3_bucket_for_cdc_from_dynamodb_to_redshift=self.dynamodb_service.s3_bucket_for_cdc_from_dynamodb_to_redshift,
             redshift_endpoint_address=self.redshift_service.redshift_cluster.attr_endpoint_address,
             redshift_role_arn=self.redshift_service.redshift_full_commands_full_access_role.role_arn,
-            vpc=self.default_vpc,
+            vpc=self.vpc,
+            vpc_subnets=ec2.SubnetSelection(
+                subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS
+            ),
+            security_group=self.security_group_for_rds_redshift_dms,
         )
 
         # schedule Lambdas to run
