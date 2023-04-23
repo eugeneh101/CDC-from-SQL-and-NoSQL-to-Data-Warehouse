@@ -78,6 +78,13 @@ class RDSService(Construct):
         security_group: ec2.SecurityGroup,
     ) -> None:
         super().__init__(scope, construct_id)  # required
+        rds_subnet_group = rds.SubnetGroup(
+            self,
+            "RdsSubnetGroup",
+            vpc=vpc,
+            vpc_subnets=vpc_subnets,  # requires at least 2 AZs
+            description="RDS Subnet Group",
+        )
         self.rds_instance = rds.DatabaseInstance(
             self,
             "RDSForCDCToRedshift",
@@ -94,7 +101,7 @@ class RDSService(Construct):
             database_name=environment["RDS_DATABASE_NAME"],
             port=environment["RDS_PORT"],
             vpc=vpc,
-            vpc_subnets=vpc_subnets,  # requires at least 2 AZs
+            subnet_group=rds_subnet_group,
             security_groups=[security_group],
             parameters={  # needed for DMS replication task to run successfully
                 "binlog_format": "ROW",
@@ -227,7 +234,7 @@ class CDCFromRDSToRedshiftService(Construct):
             engine_name="redshift",
             database_name=environment["REDSHIFT_DATABASE_NAME"],
             server_name=redshift_endpoint_address,
-            port=5439,
+            port=environment["REDSHIFT_PORT"],
             username=environment["REDSHIFT_USER"],
             password=environment["REDSHIFT_PASSWORD"],
         )
@@ -613,15 +620,15 @@ class CDCStack(Stack):
             allow_all_outbound=True,
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for RDS + DMS
-            peer=ec2.Peer.any_ipv4(),
+            peer=self.security_group_for_rds_redshift_dms,
             connection=ec2.Port.tcp(environment["RDS_PORT"]),
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for Redshift + DMS
-            peer=ec2.Peer.any_ipv4(),
+            peer=self.security_group_for_rds_redshift_dms,
             connection=ec2.Port.tcp(environment["REDSHIFT_PORT"]),
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for Redshift + DMS
-            peer=ec2.Peer.any_ipv4(),
+            peer=self.security_group_for_rds_redshift_dms,
             connection=ec2.Port.tcp(443),  # HTTPS for DMS endpoint for boto3
         )
 
