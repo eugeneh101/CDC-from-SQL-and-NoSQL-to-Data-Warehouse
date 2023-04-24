@@ -602,11 +602,11 @@ class CDCStack(Stack):
             allow_all_outbound=True,
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for RDS + DMS
-            peer=ec2.Peer.any_ipv4(),
+            peer=self.security_group_for_rds_redshift_dms,
             connection=ec2.Port.tcp(environment["RDS_PORT"]),
         )
         self.security_group_for_rds_redshift_dms.add_ingress_rule(  # for Redshift + DMS
-            peer=ec2.Peer.any_ipv4(),
+            peer=self.security_group_for_rds_redshift_dms,
             connection=ec2.Port.tcp(environment["REDSHIFT_PORT"]),
         )
 
